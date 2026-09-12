@@ -1,0 +1,193 @@
+// Umbra — Dark Web Threat Intelligence
+// This schema models the real production data. The demo UI runs on an
+// in-memory seeded store (src/lib/data/seed.ts) that mirrors these shapes,
+// so you can swap the store for Prisma without touching the UI.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Plan {
+  FREE
+  STARTER
+  BUSINESS
+  ENTERPRISE
+}
+
+enum Severity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+enum AssetType {
+  DOMAIN
+  SUBDOMAIN
+  IP
+  KEYWORD
+  EXECUTIVE
+  BRAND
+  BIN // bank identification number (card ranges)
+}
+
+enum LeakCategory {
+  CREDENTIALS
+  PII
+  FINANCIAL
+  SOURCE_CODE
+  DOCUMENTS
+  CLIENT_DATA
+  API_KEYS
+  SESSION_TOKENS
+  INFRASTRUCTURE
+}
+
+enum ExposureSource {
+  BREACH
+  STEALER_LOG
+  COMBOLIST
+  PASTE
+  FORUM
+  MARKETPLACE
+  TELEGRAM
+  RANSOMWARE_BLOG
+}
+
+enum AlertStatus {
+  NEW
+  INVESTIGATING
+  RESOLVED
+  FALSE_POSITIVE
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  domain    String   @unique
+  plan      Plan     @default(BUSINESS)
+  createdAt DateTime @default(now())
+
+  users     User[]
+  assets    MonitoredAsset[]
+  exposures Exposure[]
+  alerts    Alert[]
+  mentions  DarkWebMention[]
+  leaks     LeakedAsset[]
+  rules     AlertRule[]
+}
+
+model User {
+  id       String  @id @default(cuid())
+  email    String  @unique
+  name     String
+  role     String  @default("analyst") // owner | admin | analyst | viewer
+  orgId    String
+  org      Organization @relation(fields: [orgId], references: [id])
+}
+
+model MonitoredAsset {
+  id        String    @id @default(cuid())
+  orgId     String
+  org       Organization @relation(fields: [orgId], references: [id])
+  type      AssetType
+  value     String
+  label     String?
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+
+  @@index([orgId, type])
+}
+
+// A single leaked credential / identity record tied to the org.
+model Exposure {
+  id           String         @id @default(cuid())
+  orgId        String
+  org          Organization   @relation(fields: [orgId], references: [id])
+  email        String
+  username     String?
+  passwordType String?        // plaintext | md5 | sha1 | bcrypt | null
+  passwordHint String?        // masked sample e.g. "Sum****23!"
+  ipAddress    String?
+  source       ExposureSource
+  sourceName   String         // e.g. "LinkedIn 2021", "RedLine stealer"
+  breachDate   DateTime?
+  discoveredAt DateTime       @default(now())
+  severity     Severity
+  fields       String[]       // exposed field labels: name, phone, address...
+  isNew        Boolean        @default(true)
+
+  @@index([orgId, discoveredAt])
+  @@index([orgId, severity])
+}
+
+// A place on the dark web where the org / brand was mentioned.
+model DarkWebMention {
+  id           String         @id @default(cuid())
+  orgId        String
+  org          Organization   @relation(fields: [orgId], references: [id])
+  source       ExposureSource
+  channel      String         // forum name, telegram channel, market
+  actor        String         // threat actor handle
+  title        String
+  snippet      String
+  url          String?        // onion / tg link (reference only)
+  language     String         @default("en")
+  severity     Severity
+  postedAt     DateTime
+  discoveredAt DateTime       @default(now())
+
+  @@index([orgId, postedAt])
+}
+
+// A categorized leaked asset (dataset for sale, code repo, doc dump...).
+model LeakedAsset {
+  id           String        @id @default(cuid())
+  orgId        String
+  org          Organization  @relation(fields: [orgId], references: [id])
+  category     LeakCategory
+  title        String
+  description  String
+  source       ExposureSource
+  sourceName   String
+  recordCount  Int?
+  priceUsd     Float?        // asking price if for sale
+  severity     Severity
+  discoveredAt DateTime      @default(now())
+
+  @@index([orgId, category])
+}
+
+model AlertRule {
+  id        String   @id @default(cuid())
+  orgId     String
+  org       Organization @relation(fields: [orgId], references: [id])
+  name      String
+  category  LeakCategory?
+  minSeverity Severity   @default(MEDIUM)
+  channels  String[]     // email | slack | webhook
+  enabled   Boolean      @default(true)
+}
+
+model Alert {
+  id         String      @id @default(cuid())
+  orgId      String
+  org        Organization @relation(fields: [orgId], references: [id])
+  title      String
+  detail     String
+  severity   Severity
+  status     AlertStatus @default(NEW)
+  category   LeakCategory?
+  refType    String?     // exposure | mention | leak
+  refId      String?
+  createdAt  DateTime    @default(now())
+
+  @@index([orgId, status])
+  @@index([orgId, createdAt])
+}
